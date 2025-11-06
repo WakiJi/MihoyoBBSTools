@@ -146,7 +146,9 @@ class PushHandler:
             }
         )
 
-    # 感谢 @islandwind 提供的随机壁纸api 个人主页：https://space.bilibili.com/7600422
+    # 感谢 Lolisuki Api 提供的随机涩图api github：https://github.com/GardenHamster/LoliSuki
+    ##默认选择 2：涩 3：很涩 4：R18擦边球 5：R18 以及 1：萝莉 2：少女
+    ###可自行根据 https://lolisuki.cn/#/setu 使用文档调整
     def smtp(self, status_id, push_message):
         """
         SMTP 电子邮件推送
@@ -156,45 +158,113 @@ class PushHandler:
 
         def get_background_url():
             try:
-                _image_url = self.http.get("https://api.iw233.cn/api.php?sort=random&type=json").json()["pic"][0]
-            except:
-                _image_url = "unable to get the image"
-                log.warning("获取随机背景图失败，请检查图片api")
-            return _image_url
+                # 添加请求头
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'application/json'
+                }
+            
+                # 发送请求
+                log.info("正在请求图片API...")
+                response = self.http.get("https://lolisuki.cn/api/setu/v1?level=2-5&taste=1,2", headers=headers, timeout=10)
+            
+                # 检查响应状态
+                log.info(f"API响应状态码: {response.status_code}")
+                if response.status_code != 200:
+                    log.warning(f"API请求失败，状态码: {response.status_code}")
+                    return None
+            
+                # 解析JSON响应
+                data = response.json()
+                log.info(f"API返回数据类型: {type(data)}")
+                log.info(f"API返回数据键: {list(data.keys())}")
+            
+                # 根据日志中的数据结构，我们需要访问 data -> data[0] -> urls -> original
+                if isinstance(data, dict) and "data" in data:
+                    data_list = data["data"]
+                    if isinstance(data_list, list) and len(data_list) > 0:
+                        first_item = data_list[0]
+                        if isinstance(first_item, dict) and "urls" in first_item:
+                            if "original" in first_item["urls"]:
+                                image_url = first_item["urls"]["original"]
+                                log.info(f"成功获取图片URL: {image_url}")
+                                return image_url
+                            else:
+                                log.warning("urls字段中没有original键")
+                                log.warning(f"urls字段中的键: {list(first_item['urls'].keys())}")
+                        else:
+                            log.warning("data[0]中没有urls字段")
+                    else:
+                        log.warning("data字段不是列表或为空")
+                else:
+                    log.warning("API返回的数据中没有data字段")
+            
+                log.warning(f"完整API响应: {data}")
+                return None
+            
+            except Exception as e:
+                log.warning(f"获取随机背景图失败: {str(e)}")
+                import traceback
+                log.warning(f"详细错误信息: {traceback.format_exc()}")
+                return None
 
         def get_background_img_html(background_url):
-            if background_url:
+            if background_url and background_url != "unable to get the image":
                 return f'<img src="{background_url}" alt="background" style="width: 100%; filter: brightness(50%)">'
             return ""
 
         def get_background_img_info(background_url):
-            if background_url:
+            if background_url and background_url != "unable to get the image":
                 return f'<p style="color: #fff;text-shadow:0px 0px 10px #000;">背景图片链接</p>\n' \
-                   f'<a href="{background_url}" style="color: #fff;text-shadow:0px 0px 10px #000;">{background_url}</a>'
+                       f'<a href="{background_url}" style="color: #fff;text-shadow:0px 0px 10px #000;">{background_url}</a>'
             return ""
 
+        # 获取背景图片
         image_url = None
         if self.cfg.getboolean('smtp', 'background', fallback=True):
             image_url = get_background_url()
+            if not image_url:
+                log.warning("未能获取到背景图片，将发送无背景图片的邮件")
+                # 使用一个默认的图片URL作为后备
+                image_url = "https://i.pixiv.re/img-original/img/2021/10/11/16/06/55/93328574_p0.jpg"
 
-        with open("assets/email_example.html", encoding="utf-8") as f:
-            EMAIL_TEMPLATE = f.read()
-        message = EMAIL_TEMPLATE.format(title=get_push_title(status_id), message=push_message.replace("\n", "<br/>"),
-                                        background_image=get_background_img_html(image_url),
-                                        background_info=get_background_img_info(image_url))
-        smtp_info = self.cfg["smtp"]
-        message = MIMEText(message, "html", "utf-8")
-        message['Subject'] = smtp_info["subject"]
-        message['To'] = smtp_info["toaddr"]
-        message['From'] = f"{smtp_info['subject']}<{smtp_info['fromaddr']}>"
-        if self.cfg.getboolean("smtp", "ssl_enable"):
-            server = smtplib.SMTP_SSL(smtp_info["mailhost"], self.cfg.getint("smtp", "port"))
-        else:
-            server = smtplib.SMTP(smtp_info["mailhost"], self.cfg.getint("smtp", "port"))
-        server.login(smtp_info["username"], smtp_info["password"])
-        server.sendmail(smtp_info["fromaddr"], smtp_info["toaddr"], message.as_string())
-        server.close()
-        log.info("邮件发送成功啦")
+        # 读取邮件模板
+        try:
+            with open("assets/email_example.html", encoding="utf-8") as f:
+                EMAIL_TEMPLATE = f.read()
+        except Exception as e:
+            log.error(f"读取邮件模板失败: {e}")
+            return
+
+        # 构建邮件内容
+        message = EMAIL_TEMPLATE.format(
+            title=get_push_title(status_id), 
+            message=push_message.replace("\n", "<br/>"),
+            background_image=get_background_img_html(image_url),
+            background_info=get_background_img_info(image_url)
+        )
+    
+        # 发送邮件
+        try:
+            smtp_info = self.cfg["smtp"]
+            message = MIMEText(message, "html", "utf-8")
+            message['Subject'] = smtp_info["subject"]
+            message['To'] = smtp_info["toaddr"]
+            message['From'] = f"{smtp_info['subject']}<{smtp_info['fromaddr']}>"
+        
+            if self.cfg.getboolean("smtp", "ssl_enable"):
+                server = smtplib.SMTP_SSL(smtp_info["mailhost"], self.cfg.getint("smtp", "port"))
+            else:
+                server = smtplib.SMTP(smtp_info["mailhost"], self.cfg.getint("smtp", "port"))
+        
+            server.login(smtp_info["username"], smtp_info["password"])
+            server.sendmail(smtp_info["fromaddr"], smtp_info["toaddr"], message.as_string())
+            server.close()
+            log.info("邮件发送成功啦")
+        
+        except Exception as e:
+            log.error(f"邮件发送失败: {e}")
+
 
     def wecom(self, status_id, push_message):
         """
